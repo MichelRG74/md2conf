@@ -734,6 +734,24 @@ content-appearance-draft: full-width
 
 Content properties in the Markdown front-matter override globally configured content properties.
 
+### Content State
+
+The command-line option `--content-state` assigns a native Confluence page-level Content State (e.g. *Verified*, *Ready for review*) to a page, shown by Confluence next to the page title:
+
+```sh
+$ python3 -m md2conf docs --content-state "Ready for review"
+```
+
+This is distinct from the `STATUS-*` image references described [above](#confluence-widgets), which render a colored label *inside* the page body. A Content State is metadata attached to the page itself, independent of its content.
+
+*md2conf* doesn't create Content States or hard-code their identifiers, which are specific to a Confluence space or page. Instead, for each page it publishes, it looks up the states already available for that page and resolves `--content-state` against their exact display name (case-sensitive, no fuzzy matching). This fails with an error if no state matches, or if more than one available state shares the exact name. Add the state to the space (or to the specific page) in Confluence first if it doesn't show up as available.
+
+Content State is assigned only after a page has been published successfully; a page that fails to publish keeps its previous Content State (if any).
+
+Publishing new content to a page is itself a Confluence operation that clears any Content State already assigned to it. To avoid silently discarding a state you (or an earlier *md2conf* run) set by hand, *md2conf* reads a page's current Content State before publishing new content to it and restores that same state afterward -- this happens whether or not `--content-state` is given, and only when the page actually receives new content (an up-to-date page is left untouched). An explicit `--content-state` is applied after that restoration and takes precedence over it. When `--content-state` is omitted and a page has no Content State assigned, no related Confluence API requests are made for that page beyond this read.
+
+Confluence Content States are exposed via a REST API v1 endpoint that has no REST API v2 equivalent. *md2conf* uses it transparently regardless of whether `--api-version` is set to `v2` (Cloud, default) or `v1` (Data Center/Server).
+
 ### Local output
 
 *md2conf* supports local output, in which the tool doesn't communicate with the Confluence REST API. Instead, it reads a single Markdown file or a directory of Markdown files, and writes Confluence Storage Format (`*.csf`) output for each document. (Confluence Storage Format is a derivative of XHTML with Confluence-specific tags for complex elements such as images with captions, code blocks, info panels, collapsed sections, etc.) You can push the generated output to Confluence by invoking the API (e.g. with `curl`).
@@ -847,6 +865,9 @@ options:
   --no-line-numbers     Leave Markdown source file unmodified. (default)
   --global-properties PATH
                         JSON or YAML file of Confluence content properties to merge for every synchronized Markdown file.
+  --content-state STR   Confluence Content State to assign to a page after it has been published successfully. Must match the exact display name of a state
+                        already available for the page (e.g. `Verified`).
+  --no-content-state    Do not assign a Confluence Content State to published pages. (default)
   --notify              Notify users about changes when a Confluence page is updated.
   --no-notify           Trigger a minor edit on page updates, don't notify users about changes. (default)
   --ignore-invalid-url  Emit a warning but otherwise ignore relative URLs that point to ill-specified locations. (deprecated)
@@ -913,6 +934,7 @@ options = ProcessorOptions(
     ),
     line_numbers=bool(),
     global_properties=Path() or None,
+    content_state=str() or None,
 )
 with ConfluenceAPI(properties) as api:
     Publisher(api, options).process(mdpath)
