@@ -39,6 +39,7 @@ class ProcessorOptions:
     :param converter: Options for converting an HTML tree into Confluence Storage Format.
     :param line_numbers: Inject line numbers in Markdown source file to help localize conversion errors.
     :param global_properties: JSON or YAML file of Confluence content properties to merge for every synchronized Markdown file.
+    :param content_state: Confluence Content State to assign to a page after it has been published successfully.
     """
 
     root_page: ConfluencePageID | None = field(
@@ -90,6 +91,14 @@ class ProcessorOptions:
     )
     global_properties: Path | None = field(
         default=None, metadata=value_option("JSON or YAML file of Confluence content properties to merge for every synchronized Markdown file.")
+    )
+    content_state: str | None = field(
+        default=None,
+        metadata=nullable_option(
+            "Confluence Content State to assign to a page after it has been published successfully. Must match the exact "
+            "display name of a state already available for the page (e.g. `Verified`).",
+            "Do not assign a Confluence Content State to published pages.",
+        ),
     )
 
 

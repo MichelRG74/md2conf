@@ -478,9 +478,17 @@ class SynchronizingProcessor(Processor):
             content = elements_to_string(root)
             LOGGER.debug("Generated Confluence Storage Format document:\n%s", content)
 
+            # Confluence clears a page's Content State as a side effect of publishing new content,
+            # so read it beforehand and restore it afterward. An explicit `--content-state`, applied
+            # later by the caller once this method returns, still wins over whatever is restored here.
+            previous_content_state = self.api.get_content_state(page.id)
+
             version = page.version.number + 1
             relative_path = path_relative_to(path, self.root_dir)
             self.api.update_page(page.id, content, title=title, version=version, message=f"Synchronized by md2conf from Markdown file: {relative_path}")
+
+            if previous_content_state is not None:
+                self.api.set_content_state(page.id, previous_content_state.id)
         else:
             version = page.version.number
 
@@ -501,6 +509,10 @@ class SynchronizingProcessor(Processor):
         else:
             if source_tag is None or source_tag != target_tag:
                 self.api.update_content_properties_for_page(page.id, props, keep_existing=True)
+
+    @override
+    def _apply_content_state(self, page_id: ConfluencePageID, content_state: str) -> None:
+        self.api.apply_content_state(page_id, content_state)
 
     def _synchronize_attachment(
         self,

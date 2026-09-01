@@ -108,6 +108,15 @@ class LocalProcessor(Processor):
         for name, file_data in document.embedded_files.items():
             (csf_dir / name).write_bytes(file_data.data)
 
+    @override
+    def _apply_content_state(self, page_id: ConfluencePageID, content_state: str) -> None:
+        """
+        This implementation is a no-op, as local output has no live Confluence connection to query or assign
+        Content States against.
+        """
+
+        LOGGER.warning("Ignoring Content State %r for page with ID %s: not connected to a live Confluence site.", content_state, page_id)
+
 
 class LocalProcessorFactory(ProcessorFactory):
     out_dir: Path | None

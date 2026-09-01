@@ -239,6 +239,10 @@ class Processor:
         page_id, document = ConfluenceDocument.create(path, self.options, self.root_dir, self.site, self.page_metadata, self.user_metadata)
         self._update_page(page_id, document, path)
 
+        # only reached if `_update_page` completed without raising, i.e. the page was published successfully
+        if self.options.content_state is not None:
+            self._apply_content_state(page_id, self.options.content_state)
+
     @abstractmethod
     def _synchronize_structure(self, tree: DocumentNode) -> dict[str, list[str]]:
         """
@@ -276,6 +280,16 @@ class Processor:
     def _update_page(self, page_id: ConfluencePageID, document: ConfluenceDocument, path: Path) -> None:
         """
         Saves the document as Confluence Storage Format XHTML.
+        """
+        ...
+
+    @abstractmethod
+    def _apply_content_state(self, page_id: ConfluencePageID, content_state: str) -> None:
+        """
+        Assigns a Content State to a page that has just been published successfully.
+
+        :param page_id: The Confluence page ID.
+        :param content_state: Exact display name of the Content State to assign.
         """
         ...
 
