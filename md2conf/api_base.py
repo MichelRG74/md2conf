@@ -15,12 +15,13 @@ from pathlib import Path
 from typing import Any, Literal, TypeVar, cast, overload
 from urllib.parse import urlencode, urljoin, urlparse, urlunparse
 
-from requests import Response, Session
+from requests import HTTPError, Response, Session
 
 from .api_types import (
     ConfluenceAttachment,
     ConfluenceComment,
     ConfluenceContentProperty,
+    ConfluenceContentState,
     ConfluenceContentVersion,
     ConfluenceIdentifiedContentProperty,
     ConfluenceIdentifiedLabel,
@@ -87,6 +88,22 @@ class ConfluenceUpdateAttachmentRequest:
     status: ConfluenceStatus
     title: str
     version: ConfluenceContentVersion
+
+
+@dataclass(frozen=True)
+class ConfluenceAvailableContentStatesResponse:
+    spaceContentStates: list[ConfluenceContentState]
+    customContentStates: list[ConfluenceContentState]
+
+
+@dataclass(frozen=True)
+class ConfluenceContentStateResponse:
+    contentState: ConfluenceContentState
+
+
+@dataclass(frozen=True)
+class ConfluenceSetContentStateRequest:
+    id: int
 
 
 class ConfluenceSession(ABC):
@@ -442,6 +459,63 @@ class ConfluenceSession(ABC):
 
         ...
 
+    @abstractmethod
+    def get_content_state(self, page_id: str) -> ConfluenceContentState | None:
+        """
+        Retrieves the Content State currently assigned to a Confluence page.
+
+        :param page_id: The Confluence page ID.
+        :returns: The assigned Content State, or `None` if the page has no Content State assigned.
+        """
+        ...
+
+    @abstractmethod
+    def get_available_content_states(self, page_id: str) -> list[ConfluenceContentState]:
+        """
+        Retrieves the Content States available to assign to a Confluence page.
+
+        Combines Content States defined at the space level with any defined specifically for this page.
+
+        :param page_id: The Confluence page ID.
+        :returns: A list of Content States that may be assigned to the page.
+        """
+        ...
+
+    @abstractmethod
+    def set_content_state(self, page_id: str, content_state_id: int) -> None:
+        """
+        Assigns a Content State to a Confluence page, publishing a new version of the page.
+
+        :param page_id: The Confluence page ID.
+        :param content_state_id: Identifier of the Content State to assign, as returned by
+            `get_available_content_states`.
+        """
+        ...
+
+    def apply_content_state(self, page_id: str, name: str) -> None:
+        """
+        Resolves a Content State by its exact display name and assigns it to a Confluence page.
+
+        Content State IDs are specific to a Confluence space or page, so the state is looked up by name among the
+        states available for the given page immediately before assignment, rather than using a hard-coded ID.
+
+        :param page_id: The Confluence page ID.
+        :param name: Exact display name of the Content State to assign (case-sensitive, no fuzzy matching).
+        :raises PageError: If no Content State, or more than one Content State, matches `name` exactly.
+        """
+
+        states = self.get_available_content_states(page_id)
+        matches = [state for state in states if state.name == name]
+
+        if not matches:
+            available = ", ".join(sorted({state.name for state in states})) or "(none)"
+            raise PageError(f"no Content State named {name!r} is available for page with ID {page_id}; available states: {available}")
+        if len(matches) > 1:
+            raise PageError(f"ambiguous Content State name {name!r} for page with ID {page_id}: {len(matches)} states share this exact name")
+
+        LOGGER.info("Assigning Content State %r to page with ID %s", name, page_id)
+        self.set_content_state(page_id, matches[0].id)
+
 
 class ConfluenceSessionShared(ConfluenceSession):
     _session: Session
@@ -506,10 +580,12 @@ class ConfluenceSessionShared(ConfluenceSession):
         response.raise_for_status()
         return json_to_object(response_type, response.json())
 
-    def _build_request(self, version: ConfluenceVersion, path: str, body: Any, response_type: type[T] | None) -> tuple[str, dict[str, str], bytes]:
+    def _build_request(
+        self, version: ConfluenceVersion, path: str, body: Any, response_type: type[T] | None, *, query: dict[str, str] | None = None
+    ) -> tuple[str, dict[str, str], bytes]:
         "Generates URL, headers and raw payload for a typed request/response."
 
-        url = self._build_url(version, path)
+        url = self._build_url(version, path, query)
         headers: dict[str, str] = {}
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -536,15 +612,15 @@ class ConfluenceSessionShared(ConfluenceSession):
         return response_cast(response_type, response)
 
     @overload
-    def _put(self, version: ConfluenceVersion, path: str, body: Any, response_type: None) -> None: ...
+    def _put(self, version: ConfluenceVersion, path: str, body: Any, response_type: None, *, query: dict[str, str] | None = None) -> None: ...
 
     @overload
-    def _put(self, version: ConfluenceVersion, path: str, body: Any, response_type: type[T]) -> T: ...
+    def _put(self, version: ConfluenceVersion, path: str, body: Any, response_type: type[T], *, query: dict[str, str] | None = None) -> T: ...
 
-    def _put(self, version: ConfluenceVersion, path: str, body: Any, response_type: type[T] | None) -> T | None:
+    def _put(self, version: ConfluenceVersion, path: str, body: Any, response_type: type[T] | None, *, query: dict[str, str] | None = None) -> T | None:
         "Updates an existing object via Confluence REST API."
 
-        url, headers, data = self._build_request(version, path, body, response_type)
+        url, headers, data = self._build_request(version, path, body, response_type, query=query)
         response = self._session.put(url, data=data, headers=headers, verify=True)
         response.raise_for_status()
         return response_cast(response_type, response)
@@ -835,3 +911,30 @@ class ConfluenceSessionShared(ConfluenceSession):
         if not keep_existing and remove_labels:
             remove_labels.sort()
             self.remove_labels(page_id, remove_labels)
+
+    @override
+    def get_content_state(self, page_id: str) -> ConfluenceContentState | None:
+        path = f"/content/{page_id}/state"
+        try:
+            # `status` is a required query parameter; see `set_content_state`.
+            data = self._get(ConfluenceVersion.VERSION_1, path, ConfluenceContentStateResponse, query={"status": "current"})
+        except HTTPError as ex:
+            if ex.response is not None and ex.response.status_code == 404:
+                # no Content State currently assigned to this page
+                return None
+            raise
+        return data.contentState
+
+    @override
+    def get_available_content_states(self, page_id: str) -> list[ConfluenceContentState]:
+        path = f"/content/{page_id}/state/available"
+        data = self._get(ConfluenceVersion.VERSION_1, path, ConfluenceAvailableContentStatesResponse)
+        return [*data.spaceContentStates, *data.customContentStates]
+
+    @override
+    def set_content_state(self, page_id: str, content_state_id: int) -> None:
+        path = f"/content/{page_id}/state"
+        # `status` is a required query parameter, not a body field -- Confluence rejects the request
+        # otherwise with "Invalid status 'null'". `current` also makes the assignment publish a new
+        # version of the (already-published) page, matching every page md2conf itself ever targets.
+        self._put(ConfluenceVersion.VERSION_1, path, ConfluenceSetContentStateRequest(id=content_state_id), None, query={"status": "current"})

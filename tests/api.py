@@ -19,6 +19,7 @@ from md2conf.api_types import (
     ConfluenceAttachment,
     ConfluenceComment,
     ConfluenceContentProperty,
+    ConfluenceContentState,
     ConfluenceContentVersion,
     ConfluenceIdentifiedContentProperty,
     ConfluenceIdentifiedLabel,
@@ -56,9 +57,15 @@ class MockConfluenceSession(ConfluenceSession):
 
     _site: ConfluenceSiteMetadata
     _db: sqlite3.Connection
+    _space_content_states: list[ConfluenceContentState]
+    _assigned_content_state: dict[str, int]
+    _next_content_state_id: int
 
     def __init__(self) -> None:
         self._site = ConfluenceSiteMetadata(domain="example.atlassian.net", base_path="/wiki/", space_key="SPACE_KEY")
+        self._space_content_states = []
+        self._assigned_content_state = {}
+        self._next_content_state_id = 1
         self._db = sqlite3.connect(":memory:")
         self._db.row_factory = sqlite3.Row
         self._db.execute(
@@ -226,6 +233,23 @@ class MockConfluenceSession(ConfluenceSession):
         row: sqlite3.Row = self._db.execute("SELECT COUNT(*) AS count FROM pages").fetchone()
         return int(row["count"])
 
+    def add_space_content_state(self, name: str, color: str = "green") -> int:
+        """
+        Test helper: registers a Content State as available space-wide (i.e. for every page), returning its ID.
+        """
+
+        state_id = self._next_content_state_id
+        self._next_content_state_id += 1
+        self._space_content_states.append(ConfluenceContentState(id=state_id, name=name, color=color))
+        return state_id
+
+    def get_assigned_content_state(self, page_id: str) -> int | None:
+        """
+        Test helper: returns the Content State ID currently assigned to the given page, or `None` if unassigned.
+        """
+
+        return self._assigned_content_state.get(page_id)
+
     @property
     def site(self) -> ConfluenceSiteMetadata:
         return self._site
@@ -392,6 +416,8 @@ class MockConfluenceSession(ConfluenceSession):
         self._db.commit()
         if cursor.rowcount == 0:
             raise ConfluenceError(f"page not found with ID: {page_id}")
+        # mirrors real Confluence behavior: publishing new content clears any assigned Content State
+        self._assigned_content_state.pop(page_id, None)
 
     @override
     def create_page(self, *, title: str, content: str, parent_id: str, space_id: str) -> ConfluencePage:
@@ -581,6 +607,29 @@ class MockConfluenceSession(ConfluenceSession):
     def get_comments(self, page_id: str) -> list[ConfluenceComment]:
         LOGGER.debug("page_id: %s", page_id)
         return []
+
+    @override
+    def get_content_state(self, page_id: str) -> ConfluenceContentState | None:
+        LOGGER.debug("page_id: %s", page_id)
+        self._get_page_row(page_id)  # raises `ConfluenceError` if the page doesn't exist
+        state_id = self._assigned_content_state.get(page_id)
+        if state_id is None:
+            return None
+        return next(state for state in self._space_content_states if state.id == state_id)
+
+    @override
+    def get_available_content_states(self, page_id: str) -> list[ConfluenceContentState]:
+        LOGGER.debug("page_id: %s", page_id)
+        self._get_page_row(page_id)  # raises `ConfluenceError` if the page doesn't exist
+        return list(self._space_content_states)
+
+    @override
+    def set_content_state(self, page_id: str, content_state_id: int) -> None:
+        LOGGER.debug("page_id: %s, content_state_id: %d", page_id, content_state_id)
+        self._get_page_row(page_id)  # raises `ConfluenceError` if the page doesn't exist
+        if content_state_id not in {state.id for state in self._space_content_states}:
+            raise ConfluenceError(f"Content State not found with ID {content_state_id}")
+        self._assigned_content_state[page_id] = content_state_id
 
 
 class MockConfluenceAPI:

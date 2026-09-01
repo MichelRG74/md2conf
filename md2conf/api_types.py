@@ -272,6 +272,24 @@ class ConfluenceIdentifiedContentProperty(ConfluenceVersionedContentProperty):
     id: str
 
 
+@dataclass(frozen=True)
+class ConfluenceContentState:
+    """
+    Represents a Confluence page-level Content State (e.g. `Verified`, `Ready for review`).
+
+    Distinct from body `STATUS-*` macros, which render a colored label inside page content. A Content State is
+    native Confluence metadata shown alongside the page title, independent of the page body.
+
+    :param id: Unique identifier for the Content State, scoped to the Confluence space or content it applies to.
+    :param name: Display name of the Content State.
+    :param color: Color associated with the Content State.
+    """
+
+    id: int
+    name: str
+    color: str
+
+
 @enum.unique
 class ConfluenceCommentStatus(enum.Enum):
     """
