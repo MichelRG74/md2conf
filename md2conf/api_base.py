@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Literal, TypeVar, cast, overload
 from urllib.parse import urlencode, urljoin, urlparse, urlunparse
 
+from cattrs.errors import ClassValidationError
 from requests import HTTPError, Response, Session
 
 from .api_types import (
@@ -923,6 +924,12 @@ class ConfluenceSessionShared(ConfluenceSession):
                 # no Content State currently assigned to this page
                 return None
             raise
+        except ClassValidationError:
+            # A page that has never had a Content State assigned (e.g. one just created
+            # through the Confluence UI, not via a prior md2conf publish) can also come back
+            # as HTTP 200 with a body missing the `contentState` field entirely, rather than
+            # a 404 -- structuring that body raises this instead. Same meaning as a 404 here.
+            return None
         return data.contentState
 
     @override
